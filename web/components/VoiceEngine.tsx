@@ -100,7 +100,7 @@ export function VoiceEngine({ onWakeWord, onTranscript, onListeningChange, activ
   return null // headless component
 }
 
-export function speak(text: string): void {
+function speakBrowser(text: string): void {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return
   window.speechSynthesis.cancel()
   const u = new SpeechSynthesisUtterance(text.slice(0, 400))
@@ -115,4 +115,30 @@ export function speak(text: string): void {
   )
   if (preferred) u.voice = preferred
   window.speechSynthesis.speak(u)
+}
+
+let currentAudio: HTMLAudioElement | null = null
+
+export async function speak(text: string): Promise<void> {
+  if (typeof window === 'undefined' || !text.trim()) return
+  currentAudio?.pause()
+
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    })
+    if (!res.ok) throw new Error(`TTS request failed: ${res.status}`)
+
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const audio = new Audio(url)
+    currentAudio = audio
+    audio.onended = () => URL.revokeObjectURL(url)
+    await audio.play()
+  } catch (err) {
+    console.error('ElevenLabs TTS failed, falling back to browser voice:', err)
+    speakBrowser(text)
+  }
 }
