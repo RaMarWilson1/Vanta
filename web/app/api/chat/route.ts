@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     model: 'claude-sonnet-4-6',
     max_tokens: 1024,
     system,
-    messages
+    messages: messages.map(m => ({ role: m.role, content: m.content }))
   })
 
   let fullResponse = ''
