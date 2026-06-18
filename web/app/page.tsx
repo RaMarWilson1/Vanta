@@ -61,7 +61,12 @@ export default function Vanta() {
           const raw = line.slice(6)
           if (raw === '[DONE]') break
           try {
-            const { text: t } = JSON.parse(raw)
+            const { text: t, error } = JSON.parse(raw)
+            if (error) {
+              full = `Error: ${error}`
+              setMessages(prev => prev.map(m => m.id === aId ? { ...m, content: full } : m))
+              break
+            }
             full += t
             setMessages(prev => prev.map(m => m.id === aId ? { ...m, content: full } : m))
           } catch {}
