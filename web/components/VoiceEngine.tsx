@@ -3,22 +3,35 @@
 import { useEffect, useRef, useCallback } from 'react'
 
 const WAKE_WORDS = ['hey vanta', 'vanta', 'yo vanta']
+const SILENCE_THRESHOLD = 0.02
+const SILENCE_DURATION_MS = 1200
+const MIN_RECORDING_MS = 400
+const MAX_RECORDING_MS = 20000
 
 interface VoiceEngineProps {
   onWakeWord: () => void
   onTranscript: (text: string) => void
   onListeningChange: (listening: boolean) => void
+  onLevelChange: (level: number) => void
   active: boolean
   wakeWordEnabled: boolean
 }
 
-export function VoiceEngine({ onWakeWord, onTranscript, onListeningChange, active, wakeWordEnabled }: VoiceEngineProps) {
+export function VoiceEngine({ onWakeWord, onTranscript, onListeningChange, onLevelChange, active, wakeWordEnabled }: VoiceEngineProps) {
   const wakeRef = useRef<any>(null)
-  const activeRef = useRef<any>(null)
   const wakeEnabledRef = useRef(wakeWordEnabled)
   useEffect(() => {
     wakeEnabledRef.current = wakeWordEnabled
   }, [wakeWordEnabled])
+
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const lastLoudRef = useRef(0)
+  const startedAtRef = useRef(0)
+  const heardSpeechRef = useRef(false)
+  const prevActiveRef = useRef(false)
 
   // Wake word listener — always running in background
   useEffect(() => {
@@ -40,13 +53,16 @@ export function VoiceEngine({ onWakeWord, onTranscript, onListeningChange, activ
         .trim()
 
       if (WAKE_WORDS.some(w => text.includes(w))) {
-        wake.stop()
+        try { wake.stop() } catch {}
         onWakeWord()
       }
     }
 
+    wake.onerror = () => {
+      // Swallow no-speech/network errors — onend below restarts it.
+    }
+
     wake.onend = () => {
-      // Auto-restart wake word listener
       if (wakeEnabledRef.current) {
         try { wake.start() } catch {}
       }
@@ -58,87 +74,119 @@ export function VoiceEngine({ onWakeWord, onTranscript, onListeningChange, activ
     return () => { try { wake.stop() } catch {} }
   }, [onWakeWord])
 
-  // Active listening — fires when user presses mic or wake word triggers
-  const startListening = useCallback(() => {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SR) return
+  const stopLevelLoop = useCallback(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    rafRef.current = null
+    onLevelChange(0)
+  }, [onLevelChange])
 
-    const rec = new SR()
-    rec.continuous = false
-    rec.interimResults = false
-    rec.lang = 'en-US'
-
-    rec.onstart = () => onListeningChange(true)
-    rec.onresult = (e: any) => {
-      const transcript = e.results[0][0].transcript
-      onTranscript(transcript)
-    }
-    rec.onend = () => {
-      onListeningChange(false)
-      // Restart wake word listener
-      try { wakeRef.current?.start() } catch {}
-    }
-    rec.onerror = () => {
-      onListeningChange(false)
-      try { wakeRef.current?.start() } catch {}
-    }
-
-    try { wakeRef.current?.stop() } catch {}
-    try { rec.start() } catch {}
-    activeRef.current = rec
-  }, [onTranscript, onListeningChange])
-
-  const stopListening = useCallback(() => {
-    try { activeRef.current?.stop() } catch {}
+  const finishRecording = useCallback(() => {
+    const recorder = recorderRef.current
+    if (recorder && recorder.state !== 'inactive') recorder.stop()
   }, [])
 
-  // Expose to parent via effect
+  const startLevelLoop = useCallback((analyser: AnalyserNode) => {
+    const data = new Uint8Array(analyser.frequencyBinCount)
+
+    const tick = () => {
+      analyser.getByteTimeDomainData(data)
+      let sum = 0
+      for (let i = 0; i < data.length; i++) {
+        const v = (data[i] - 128) / 128
+        sum += v * v
+      }
+      const level = Math.sqrt(sum / data.length)
+      onLevelChange(level)
+
+      const now = performance.now()
+      if (level > SILENCE_THRESHOLD) {
+        lastLoudRef.current = now
+        heardSpeechRef.current = true
+      }
+      const elapsed = now - startedAtRef.current
+      const silentFor = now - lastLoudRef.current
+      const shouldStop =
+        (heardSpeechRef.current && silentFor > SILENCE_DURATION_MS && elapsed > MIN_RECORDING_MS) ||
+        elapsed > MAX_RECORDING_MS
+
+      if (shouldStop) {
+        finishRecording()
+        return
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+  }, [onLevelChange, finishRecording])
+
+  const startListening = useCallback(async () => {
+    try { wakeRef.current?.stop() } catch {}
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext
+      const audioCtx: AudioContext = new AudioCtx()
+      audioCtxRef.current = audioCtx
+      const source = audioCtx.createMediaStreamSource(stream)
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 256
+      source.connect(analyser)
+
+      const mimeType = ['audio/webm', 'audio/mp4', 'audio/ogg'].find(t => MediaRecorder.isTypeSupported(t)) ?? ''
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      chunksRef.current = []
+      heardSpeechRef.current = false
+      lastLoudRef.current = performance.now()
+      startedAtRef.current = performance.now()
+
+      recorder.ondataavailable = (e: BlobEvent) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data)
+      }
+
+      recorder.onstop = async () => {
+        stopLevelLoop()
+        onListeningChange(false)
+        stream.getTracks().forEach(t => t.stop())
+        audioCtx.close().catch(() => {})
+
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+        chunksRef.current = []
+
+        if (blob.size > 1000) {
+          try {
+            const form = new FormData()
+            form.append('audio', blob, 'speech.webm')
+            const res = await fetch('/api/stt', { method: 'POST', body: form })
+            if (res.ok) {
+              const { text } = await res.json()
+              if (text?.trim()) onTranscript(text.trim())
+            }
+          } catch (err) {
+            console.error('STT request failed:', err)
+          }
+        }
+
+        try { wakeRef.current?.start() } catch {}
+      }
+
+      recorderRef.current = recorder
+      recorder.start()
+      onListeningChange(true)
+      startLevelLoop(analyser)
+    } catch (err) {
+      console.error('Microphone access failed:', err)
+      onListeningChange(false)
+    }
+  }, [onListeningChange, onTranscript, startLevelLoop, stopLevelLoop])
+
   useEffect(() => {
-    if (active) startListening()
-  }, [active, startListening])
+    if (active && !prevActiveRef.current) {
+      startListening()
+    } else if (!active && prevActiveRef.current) {
+      finishRecording()
+    }
+    prevActiveRef.current = active
+  }, [active, startListening, finishRecording])
 
   return null // headless component
-}
-
-function speakBrowser(text: string): void {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return
-  window.speechSynthesis.cancel()
-  const u = new SpeechSynthesisUtterance(text.slice(0, 400))
-  u.rate = 1.05
-  u.pitch = 0.88
-  u.volume = 0.95
-  const voices = window.speechSynthesis.getVoices()
-  const preferred = voices.find(v =>
-    v.name.includes('Google UK English Male') ||
-    v.name.includes('Daniel') ||
-    v.name.includes('Alex')
-  )
-  if (preferred) u.voice = preferred
-  window.speechSynthesis.speak(u)
-}
-
-let currentAudio: HTMLAudioElement | null = null
-
-export async function speak(text: string): Promise<void> {
-  if (typeof window === 'undefined' || !text.trim()) return
-  currentAudio?.pause()
-
-  try {
-    const res = await fetch('/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
-    })
-    if (!res.ok) throw new Error(`TTS request failed: ${res.status}`)
-
-    const blob = await res.blob()
-    const url = URL.createObjectURL(blob)
-    const audio = new Audio(url)
-    currentAudio = audio
-    audio.onended = () => URL.revokeObjectURL(url)
-    await audio.play()
-  } catch (err) {
-    console.error('ElevenLabs TTS failed, falling back to browser voice:', err)
-    speakBrowser(text)
-  }
 }

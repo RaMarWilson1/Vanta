@@ -2,8 +2,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { VantaOrb, OrbState } from '@/components/VantaOrb'
-import { VoiceEngine, speak } from '@/components/VoiceEngine'
+import { VoiceEngine } from '@/components/VoiceEngine'
 import { MessageBubble, Message } from '@/components/MessageBubble'
+import { Waveform } from '@/components/Waveform'
+import { useTTSQueue } from '@/lib/useTTSQueue'
 
 const QUICK = [
   { label: 'Morning brief', prompt: 'Give me my morning brief. What should I focus on today?' },
@@ -20,8 +22,10 @@ export default function Vanta() {
   const [streaming, setStreaming] = useState(false)
   const [wakeEnabled, setWakeEnabled] = useState(true)
   const [activeListen, setActiveListen] = useState(false)
+  const [micLevel, setMicLevel] = useState(0)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const tts = useTTSQueue()
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -29,6 +33,7 @@ export default function Vanta() {
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || streaming) return
+    tts.reset()
 
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text.trim() }
     const newMessages = [...messages, userMsg]
@@ -51,6 +56,7 @@ export default function Vanta() {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let full = ''
+      let hadError = false
       setOrbState('speaking')
 
       while (true) {
@@ -63,23 +69,25 @@ export default function Vanta() {
           try {
             const { text: t, error } = JSON.parse(raw)
             if (error) {
+              hadError = true
               full = `Error: ${error}`
               setMessages(prev => prev.map(m => m.id === aId ? { ...m, content: full } : m))
               break
             }
             full += t
             setMessages(prev => prev.map(m => m.id === aId ? { ...m, content: full } : m))
+            tts.push(t)
           } catch {}
         }
       }
-      speak(full)
+      if (!hadError) tts.flush()
     } catch {
       setMessages(prev => prev.map(m => m.id === aId ? { ...m, content: 'Error. Check API keys.' } : m))
     } finally {
       setOrbState('idle')
       setStreaming(false)
     }
-  }, [messages, streaming])
+  }, [messages, streaming, tts])
 
   const handleWakeWord = useCallback(() => {
     setOrbState('wakeword')
@@ -95,19 +103,23 @@ export default function Vanta() {
     sendMessage(text)
   }, [sendMessage])
 
+  const level = orbState === 'speaking' ? tts.level : micLevel
+  const waveActive = orbState === 'listening' || orbState === 'speaking'
+
   return (
     <div style={{ position:'relative', height:'100vh', display:'flex', flexDirection:'column', zIndex:1 }}>
       <VoiceEngine
         onWakeWord={handleWakeWord}
         onTranscript={handleTranscript}
         onListeningChange={l => !l && setActiveListen(false)}
+        onLevelChange={setMicLevel}
         active={activeListen}
         wakeWordEnabled={wakeEnabled}
       />
 
       {/* Header */}
       <div style={{
-        padding:'18px 24px',
+        padding:'14px 24px',
         borderBottom:'1px solid var(--red-border)',
         display:'flex', alignItems:'center', gap:14,
         background:'rgba(0,0,0,0.5)',
@@ -130,18 +142,14 @@ export default function Vanta() {
         >
           {wakeEnabled ? '◉ HEY VANTA' : '○ WAKE WORD'}
         </button>
-        <div style={{
-          width:6, height:6, borderRadius:'50%',
-          background: streaming ? 'var(--red)' : '#1e1e1e',
-          boxShadow: streaming ? '0 0 10px var(--red-glow)' : 'none',
-          transition:'all 0.3s'
-        }} />
+        {messages.length > 0 && <VantaOrb state={orbState} level={level} size={28} showLabel={false} />}
       </div>
 
       {/* Main */}
       {messages.length === 0 ? (
-        <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:52 }}>
-          <VantaOrb state={orbState} />
+        <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:28 }}>
+          <VantaOrb state={orbState} level={level} />
+          <Waveform level={level} active={waveActive} />
           <div style={{ display:'flex', flexWrap:'wrap', gap:8, justifyContent:'center', maxWidth:480, padding:'0 20px' }}>
             {QUICK.map(q => (
               <motion.button
