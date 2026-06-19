@@ -1,0 +1,2 @@
+## Career goals
+Targeting early-stage NYC/NJ startups — founding engineer or early engineer roles. Salary target: $115,000–$130,000 base. Preference: hybrid (NYC/NJ metro). Positioning: "zero to one" builder with production traction, real users, and pre-seed investment. Job search pipeline is depleted — he's applied broadly and needs strategic outreach, warm leads, and interview prep more than more applications.

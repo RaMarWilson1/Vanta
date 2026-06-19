@@ -1,0 +1,8 @@
+## What he's building
+**Bontro** — Multi-tenant SaaS booking and business management platform for independent service professionals: barbers, nail techs, estheticians, hairstylists, tattoo artists, cleaners, HVAC workers, dog groomers, massage therapists, personal trainers, tutors, photographers. Manages bookings, payments, deposits, reminders, SMS, client management, analytics, reviews, SEO landing pages, marketplace discovery, team management, and widgets.
+
+Stack: React Native/Expo (iOS + Android), Next.js 15 App Router, TypeScript, Tailwind v4, Stripe Connect + Terminal + Tips, Telnyx SMS, Upstash Redis, Vercel Blob, Sentry, EAS build pipeline, subdomain routing, walk-in kiosk mode, 153+ automated tests.
+
+Ra'Mar built Bontro because he lived the problem — six years as a barber managing clients through DMs, chasing payments, dealing with no-shows. He is the customer, which gives him a founder story that isn't manufactured. Pre-seed investment: $10,000 for 3% from Brian Li, senior engineer at Medidata. Previously named BookBetter — rebranded to Bontro after trademark conflicts. Domain: bontro.co. API endpoints are not built yet as of the last update — don't attempt Bontro API calls until he says they're ready.
+
+**One More Day** — Peer support platform built around helping people stay one more day. 95+ active users, 50% retention. Features: mood tracking, private journaling, wellness tools, safety resources, community features, streak tracking, mood history with PDF export, admin moderation. Stack: OpenAI dual-layer moderation pipeline, crisis detection, COPPA compliant, Stripe tips, Ko-fi donations, OneSignal push. This project came from wanting to reach people who are struggling or isolated.
